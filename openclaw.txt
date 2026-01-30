@@ -1,0 +1,127 @@
+OpenClaw install attempt summary (Alpine aarch64/musl)
+
+Context
+- Shell env: Alpine (musl) under Termux; Node v25.4.0 installed in /home/murat/.local/node-v25.4.0
+- OpenClaw installer script: /home/murat/projects/openclaw-installer/install.sh
+
+Steps taken
+1) Ran installer
+   - bash install.sh
+   - Timed out twice waiting on npm install
+
+2) Ran installer with verbose
+   - bash install.sh --no-onboard --no-prompt --verbose
+   - Observed npm install -g openclaw@latest was the slow step
+
+3) Installed OpenClaw directly with npm
+   - npm --loglevel notice --no-fund --no-audit install -g openclaw@latest
+   - Completed after ~12 minutes
+   - Verified openclaw bin link at /home/murat/.local/node-v25.4.0/bin/openclaw
+   - Symlinked to /home/murat/.local/bin/openclaw
+
+4) Attempted to run OpenClaw
+   - openclaw --version
+   - Failed: missing native module @mariozechner/clipboard-linux-arm64-musl
+
+5) Tried to use glibc build of clipboard module
+   - npm install @mariozechner/clipboard-linux-arm64-gnu (EBADPLATFORM)
+   - Forced install succeeded but loading fails (missing glibc symbols)
+   - gcompat installed; still fails with gnu_get_libc_version / __res_init
+
+6) Tried full glibc via sgerrand
+   - Installed sgerrand glibc packages (2.35-r1)
+   - Trigger crashed with Illegal instruction
+   - Observed /usr/glibc-compat/lib has x86_64 loader only (ld-linux-x86-64.so.2)
+   - /lib/ld-linux-aarch64.so.1 is still the gcompat stub
+
+Issues encountered
+- install.sh npm step took longer than the command timeout (multiple timeouts)
+- OpenClaw fails to start on Alpine aarch64/musl because:
+  - @mariozechner/clipboard does not publish a linux-arm64-musl binary
+  - No fallback build for musl; the module expects a platform-specific native .node file
+- Forcing the glibc (linux-arm64-gnu) binary on musl fails due to missing glibc symbols
+- gcompat does not provide required glibc symbols for this module
+- sgerrand glibc packages are x86_64-only; they cannot provide aarch64 glibc on this system
+- apk sometimes reports “errors updating directory permissions” but installs still proceed
+
+Current status
+- OpenClaw package is installed globally (version 2026.1.29)
+- CLI cannot start on Alpine aarch64/musl due to missing native clipboard module
+
+---
+
+Continued troubleshooting (2026-01-30)
+
+7) Investigated the clipboard module further
+   - Checked npm info for @mariozechner/clipboard
+   - Package description claims musl support was added
+   - Found clipboard.linux-arm64-musl.node file exists in node_modules
+   - But running openclaw still fails with: gnu_get_libc_version: symbol not found
+
+8) Inspected the .node binary
+   - readelf -d clipboard.linux-arm64-musl.node | grep NEEDED
+   - Output showed links to glibc libraries:
+     - libgcc_s.so.1
+     - libpthread.so.0
+     - libm.so.6
+     - libdl.so.2
+     - libc.so.6
+   - Root cause: the "musl" binary was built incorrectly, still linked against glibc
+
+9) Checked package.json for published binaries
+   - @mariozechner/clipboard publishes these optional dependencies:
+     - linux-x64-gnu, linux-arm64-gnu (glibc)
+     - linux-x64-musl (musl x64 only)
+     - darwin-x64, darwin-arm64, darwin-universal
+     - win32-x64-msvc, win32-arm64-msvc
+     - linux-riscv64-gnu
+   - Missing: linux-arm64-musl (our platform)
+   - The existing .node file was auto-generated during npm install but linked wrong
+
+10) Built clipboard module from source
+    - Removed broken sgerrand glibc packages:
+      apk del glibc glibc-bin glibc-i18n
+      rm -rf /usr/glibc-compat
+    - Updated apk index:
+      apk update
+    - Installed Rust toolchain and build tools:
+      apk add --no-cache rust cargo build-base
+    - Verified Rust installation:
+      rustc 1.87.0 (Alpine Linux)
+      cargo 1.87.0 (Alpine Linux)
+    - Installed napi-rs CLI in clipboard module:
+      cd /home/murat/.local/node-v25.4.0/lib/node_modules/openclaw/node_modules/@mariozechner/clipboard
+      npm install @napi-rs/cli
+    - Built native module:
+      npm run build
+    - Build completed in ~5 minutes
+
+11) Verified the rebuilt binary
+    - readelf -d clipboard.linux-arm64-musl.node | grep NEEDED
+    - Now correctly linked to musl:
+      - libgcc_s.so.1
+      - libc.musl-aarch64.so.1
+    - No more glibc dependencies
+
+12) Tested OpenClaw
+    - openclaw --version
+    - Output: 2026.1.29
+    - SUCCESS
+
+Resolution
+- The @mariozechner/clipboard package does not publish a prebuilt linux-arm64-musl binary
+- The binary generated during npm install was incorrectly linked against glibc
+- Solution: rebuild the native module from source using Alpine's Rust toolchain
+- This produces a correctly linked musl binary
+
+Requirements for building from source on Alpine aarch64
+- rust (1.87.0 or compatible)
+- cargo
+- build-base (gcc, make, etc.)
+- Node.js with npm
+- @napi-rs/cli (installed locally in the clipboard module)
+
+Final status
+- OpenClaw 2026.1.29 running on Alpine Linux 3.22 aarch64 (musl libc 1.2.5)
+- Native clipboard module rebuilt from source with correct musl linking
+
