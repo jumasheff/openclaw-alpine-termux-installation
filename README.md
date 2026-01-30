@@ -85,6 +85,10 @@ npm install -g openclaw@latest && \
 cd $(npm root -g)/openclaw/node_modules/@mariozechner/clipboard && \
 npm install @napi-rs/cli && \
 npm run build && \
+cd - && \
+OPENCLAW_DIR=$(npm root -g)/openclaw/dist/infra && \
+sed -i 's/const nets = os.networkInterfaces();/let nets; try { nets = os.networkInterfaces(); } catch { return os.hostname(); }/' "$OPENCLAW_DIR/system-presence.js" && \
+sed -i 's/const ifaces = os.networkInterfaces();/let ifaces; try { ifaces = os.networkInterfaces(); } catch { return { ipv4: [], ipv6: [] }; }/' "$OPENCLAW_DIR/tailnet.js" && \
 openclaw --version
 ```
 
@@ -136,8 +140,28 @@ Wrong output (glibc - needs rebuild):
 | cargo | 1.87+ | Rust package manager |
 | build-base | any | gcc, make, etc. |
 
+## Proot Network Interface Fix
+
+In proot environments, `os.networkInterfaces()` fails with permission denied. This causes OpenClaw commands like `doctor` and `onboard` to crash.
+
+Patch two files to add try-catch wrappers:
+
+```bash
+OPENCLAW_DIR=$(npm root -g)/openclaw/dist/infra
+
+# Patch system-presence.js
+sed -i 's/const nets = os.networkInterfaces();/let nets; try { nets = os.networkInterfaces(); } catch { return os.hostname(); }/' \
+  "$OPENCLAW_DIR/system-presence.js"
+
+# Patch tailnet.js
+sed -i 's/const ifaces = os.networkInterfaces();/let ifaces; try { ifaces = os.networkInterfaces(); } catch { return { ipv4: [], ipv6: [] }; }/' \
+  "$OPENCLAW_DIR/tailnet.js"
+```
+
+After patching, commands like `openclaw doctor` will work.
+
 ## Notes
 
 - Build takes ~5 minutes and ~700MB disk space for Rust toolchain
 - You can remove rust/cargo after building if space is tight: `apk del rust cargo`
-- After OpenClaw updates, you may need to rebuild the clipboard module again
+- After OpenClaw updates, you may need to rebuild the clipboard module and reapply the proot patches

@@ -125,3 +125,34 @@ Final status
 - OpenClaw 2026.1.29 running on Alpine Linux 3.22 aarch64 (musl libc 1.2.5)
 - Native clipboard module rebuilt from source with correct musl linking
 
+---
+
+Additional proot fix (2026-01-30)
+
+13) Discovered os.networkInterfaces() crash in proot
+    - Commands like `openclaw doctor` and `openclaw onboard` crashed
+    - Error: uv_interface_addresses returned Unknown system error 13
+    - Cause: proot doesn't expose /proc/net interfaces (permission denied)
+
+14) Located the problematic code
+    - grep -r "networkInterfaces" found two files:
+      - dist/infra/system-presence.js (line 15)
+      - dist/infra/tailnet.js (line 23)
+    - Both call os.networkInterfaces() without error handling
+
+15) Applied patches to wrap calls in try-catch
+    - system-presence.js: returns os.hostname() on error
+    - tailnet.js: returns empty arrays on error
+    - After patching, `openclaw doctor` runs successfully
+
+Patch commands:
+    OPENCLAW_DIR=$(npm root -g)/openclaw/dist/infra
+    sed -i 's/const nets = os.networkInterfaces();/let nets; try { nets = os.networkInterfaces(); } catch { return os.hostname(); }/' "$OPENCLAW_DIR/system-presence.js"
+    sed -i 's/const ifaces = os.networkInterfaces();/let ifaces; try { ifaces = os.networkInterfaces(); } catch { return { ipv4: [], ipv6: [] }; }/' "$OPENCLAW_DIR/tailnet.js"
+
+Updated final status
+- OpenClaw 2026.1.29 fully functional on Alpine Linux 3.22 aarch64 (proot)
+- Native clipboard module rebuilt from source
+- Network interface calls patched for proot compatibility
+- `openclaw doctor` confirms gateway ready to start
+
